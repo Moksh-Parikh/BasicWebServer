@@ -1,5 +1,6 @@
 #include "server_functions.h"
 
+
 int getHTTPMethod(char *request) {
     char* allowedMethods[NUMBER_OF_METHODS] = {
             "GET",
@@ -31,6 +32,8 @@ int getFirstLine(char* longString, char** splitString) {
     }
 
     newlineIndex = (int)(newlinePointer - longString);
+    
+    *splitString = calloc(newlineIndex, sizeof(char) );
     strncpy(*splitString, longString, newlineIndex);
     
     return 0;
@@ -45,7 +48,7 @@ int getFile(int* size, char* fileName, char** fileContent) {
     fileDescriptor = open(fileName, O_RDONLY);
 
     if (fileDescriptor < 0) {
-        return 1;
+        return FILE_NOT_FOUND;
     }
 
     fileSize = lseek(fileDescriptor, 0, SEEK_END);
@@ -123,6 +126,7 @@ int getMIMEType(char* fileName, char** output) {
             return IS_A_DIR;
         }
         *output = malloc( (strlen(MIMETypeList[7]) + 1 ) * sizeof(char));
+        if (*output == NULL) return -1;
 
         // application/octet-stream
         strncpy(*output,
@@ -132,16 +136,18 @@ int getMIMEType(char* fileName, char** output) {
         return 0;
     }
 
-    fileExtension = malloc(10 * sizeof(char));
+    fileExtension = calloc(10, sizeof(char));
     dotIndex = dotPointer - fileName;
  
     strncpy(fileExtension, fileName + dotIndex, strlen(fileName) - dotIndex);
 
     for (int i = 0; i < 60; i++) {
         if (strcmp(fileExtension, fileExtensionList[i]) == 0) {
-            *output = malloc((
-            strlen(MIMETypeList[i]) + 1 ) * sizeof(char)
+            *output = calloc(
+                strlen(MIMETypeList[i]) + 1,
+                sizeof(char)
             );
+            if (*output == NULL) return -1;
             
             strncpy(*output, MIMETypeList[i], strlen(MIMETypeList[i]));
             free(fileExtension);
@@ -151,6 +157,7 @@ int getMIMEType(char* fileName, char** output) {
 
     // application/octet-stream
     *output = malloc((strlen(MIMETypeList[7]) + 1 ) * sizeof(char));
+    if (*output == NULL) return -1;
     strncpy(*output, MIMETypeList[7], strlen(MIMETypeList[7]));
     free(fileExtension);
     
@@ -169,9 +176,13 @@ int generateHTTPResponse(int responseCode, char* MIMEtype, char* content, long l
     // and 2 for CRLF
     // 14 for Content-Type,
     // and 4 for the last two CRLFs
+    printf("%s\n", MIMEtype);
     int responseSize = (80 + strlen(MIMEtype) + contentSize) * sizeof(char);
 
+    printf("response size: %d, contentSize: %d\n", responseSize, contentSize);
+
     *response = malloc(responseSize);
+    if (*response == NULL) return -1;
 
     snprintf(*response, responseSize, 
          "HTTP/1.1 %d\r\n"
@@ -184,6 +195,7 @@ int generateHTTPResponse(int responseCode, char* MIMEtype, char* content, long l
     );
 
     memcpy(*response + strlen(*response), content, contentSize);
+    printf("passed memcpy\n");
 
     return responseSize;
 }
@@ -191,25 +203,25 @@ int generateHTTPResponse(int responseCode, char* MIMEtype, char* content, long l
 
 
 void* handleClient(void* client_fd) {
-    char *response;
+    char *response = NULL;
     int responseSize;
 
-    char *request;
-    char *requestFirstLine;
+    char *request = NULL;
+    char *requestFirstLine = NULL;
     int requestMethod;
 
-    char* fileName;
-    char* requestedFileContent;
+    char* fileName = NULL;
+    char* requestedFileContent = NULL;
     
     int fileSize;
     int fileStatus;
 
-    char* MIMEtype;
+    char* MIMEtype = NULL;
 
     request = malloc(BUFFER_SIZE);
-    requestFirstLine = malloc(BUFFER_SIZE);
+    requestFirstLine = NULL;
 
-    if (request == NULL || requestFirstLine == NULL) {
+    if (request == NULL) {
         fprintf(stderr, "failed to malloc(%d)", BUFFER_SIZE);
 
         return (void*)MALLOC_ERROR;
@@ -221,45 +233,52 @@ void* handleClient(void* client_fd) {
         fprintf(stderr, "Failed to recv()\n");
         exit(1);
     }
-    
 
-    if (request > 0) {
-        if (getFirstLine(request, &requestFirstLine) == BAD_REQUEST) {
-            
-            getFile(&fileSize, "badrequest.html", &requestedFileContent);
+    if (getFirstLine(request, &requestFirstLine) == BAD_REQUEST) {
+        
+        getFile(&fileSize, "badrequest.html", &requestedFileContent);
 
 
-            responseSize = 
-                         generateHTTPResponse(400,
-                                             "text/html", 
-                                             requestedFileContent,
-                                             fileSize,
-                                             &response);
-            send(
-                    // this casts the void pointer to an 
-                    // integer pointer and gets its value
-                    *((int*)client_fd),
-                    response,
-                    responseSize,
-                    0
-                );
-            
-            free(requestedFileContent);
-            free(MIMEtype);
-            free(response);
-            
-            printf("\n\n");
-            return NULL;
-        }
+        responseSize = 
+                     generateHTTPResponse(400,
+                                         "text/html", 
+                                         requestedFileContent,
+                                         fileSize,
+                                         &response);
+        send(
+                // this casts the void pointer to an 
+                // integer pointer and gets its value
+                *((int*)client_fd),
+                response,
+                responseSize,
+                0
+            );
+
+        free(requestedFileContent);
+        requestedFileContent = NULL;
+
+        free(MIMEtype);
+        MIMEtype = NULL;
+
+        free(response);
+        response = NULL;
+
+        free(requestFirstLine);
+        requestFirstLine = NULL;
+
+        printf("\n\n");
+        return NULL;
     }
 
     printf("%s\n", requestFirstLine);
 
     requestMethod = getHTTPMethod(request);
     free(request);
+    request = NULL;
 
     getFileName(requestFirstLine, requestMethod, &fileName);
     free(requestFirstLine);
+    requestFirstLine = NULL;
 
     if (getMIMEType(fileName, &MIMEtype) == IS_A_DIR) {
         responseSize = 
@@ -278,8 +297,13 @@ void* handleClient(void* client_fd) {
             );
         
         free(requestedFileContent);
-        free(MIMEtype);
+        requestedFileContent = NULL;
+
+        printf("fileContent, ");
         free(response);
+
+        response = NULL;
+        printf("response\n");
         
         printf("\n\n");
         return NULL;
@@ -287,8 +311,10 @@ void* handleClient(void* client_fd) {
     
     fileStatus = getFile(&fileSize, fileName, &requestedFileContent);
     free(fileName);
+    fileName = NULL;
 
     if (fileStatus == FILE_NOT_FOUND) {
+        printf("not found\n");
         responseSize =
                      generateHTTPResponse(
                             404,
@@ -297,11 +323,18 @@ void* handleClient(void* client_fd) {
                             21,
                             &response
                      );
+        free(requestedFileContent);
+        requestedFileContent = NULL;
+        free(MIMEtype);
+        MIMEtype = NULL;
     }
     else if (fileStatus == MALLOC_ERROR) {
         free(requestedFileContent);
+        requestedFileContent = NULL;
         free(MIMEtype);
+        MIMEtype = NULL;
         free(response);
+        response = NULL;
         return (void*)MALLOC_ERROR;
     }
     else {
@@ -312,9 +345,13 @@ void* handleClient(void* client_fd) {
     close(*((int*)client_fd));
 
     free(client_fd);
+    client_fd = NULL;
     free(requestedFileContent);
+    requestedFileContent = NULL;
     free(MIMEtype);
+    MIMEtype = NULL;
     free(response);
+    response = NULL;
 
     printf("\n\n");
 
